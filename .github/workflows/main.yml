@@ -9,7 +9,7 @@ jobs:
   download_and_upload:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # <--- CRITICAL: Allows the bot to save the history file
+      contents: write
 
     steps:
       - name: Checkout Code
@@ -18,10 +18,12 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: '3.10'
 
       - name: Install Dependencies
         run: |
+          # Install latest yt-dlp to ensure compatibility
+          pip install https://github.com/yt-dlp/yt-dlp/archive/master.zip
           pip install -r requirements.txt
           sudo apt-get update
           sudo apt-get install -y ffmpeg
@@ -30,6 +32,7 @@ jobs:
         env:
           GDRIVE_SA_KEY: ${{ secrets.GDRIVE_SA_KEY }}
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          COOKIES_TXT: ${{ secrets.COOKIES_TXT }}  # <--- Passing the cookies here
         run: python youtube_to_drive.py
 
       - name: Commit History
