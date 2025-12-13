@@ -17,12 +17,19 @@ COOKIE_FILE_PATH = "cookies.txt"
 YTDLP_OPTS = {
     # Download best video (max 480p) and best audio, then merge
     'format': 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best[height<=480]',
-    # CRITICAL FIX: Name file by ID locally to avoid "File not found" errors with special characters
+    
+    # --- SPEED BOOST SETTINGS ---
+    'concurrent_fragment_downloads': 4, # Download 4 parts at once (Faster!)
+    'http_chunk_size': 10485760,        # 10MB chunks for better stability
+    # ---------------------------
+
+    # Name file by ID locally to avoid "File not found" errors with special characters
     'outtmpl': '%(id)s.%(ext)s',
     'quiet': True,
     'no_warnings': True,
+    'noprogress': True, # Keeps logs clean
     'restrictfilenames': True,
-    'sleep_interval': 5, # Wait 5s between downloads to avoid blocks
+    'sleep_interval': 5,
 }
 
 def setup_cookies():
@@ -91,8 +98,8 @@ def main():
     extract_opts = {
         'extract_flat': True, 
         'quiet': True,
-        'playlistend': 10,  # <--- CRITICAL: Stops scanning after the 10th newest video
-        'dateafter': 'now-24hours', # <--- SAFETY: Only looks at videos from the last 24 hours
+        'playlistend': 10,  # Stops scanning after the 10th newest video
+        'dateafter': 'now-24hours', # Only looks at videos from the last 24 hours
     }
     if has_cookies:
         extract_opts['cookiefile'] = COOKIE_FILE_PATH
@@ -109,7 +116,7 @@ def main():
         print("No videos found.")
         return
 
-    # Check the found entries (limited to 10 max)
+    # Check the found entries
     recent_videos = [v for v in info['entries'] if v]
 
     if not recent_videos:
@@ -127,6 +134,7 @@ def main():
             continue
 
         print(f"Found new video: {title} ({vid_id})")
+        print("Starting download... (Multi-threaded speed boost active)")
         
         # 2. Download
         download_success = False
@@ -134,13 +142,13 @@ def main():
             with yt_dlp.YoutubeDL(YTDLP_OPTS) as ydl:
                 ydl.download([video['url']])
             download_success = True
+            print("Download phase complete.")
         except Exception as e:
             print(f"Failed to download {title}: {e}")
             continue
 
         if download_success:
-            # FIX: Find the file by looking for the ID (more reliable than Title)
-            # yt-dlp might output .mp4, .mkv, or .webm depending on the merge
+            # FIX: Find the file by looking for the ID
             possible_files = glob.glob(f"{vid_id}.*")
             video_files = [f for f in possible_files if f.endswith(('.mp4', '.mkv', '.webm'))]
 
