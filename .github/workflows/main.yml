@@ -42,4 +42,3 @@ jobs:
           # Commit only if there are changes
           git commit -m "Update download history" || echo "No new videos to commit"
           git push
-```
