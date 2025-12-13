@@ -2,14 +2,15 @@ name: Auto Video Downloader
 
 on:
   schedule:
-    # Runs every 30 minutes
     - cron: '*/30 * * * *'
-  workflow_dispatch: # Allows manual trigger button for testing
+  workflow_dispatch:
 
 jobs:
   download_and_upload:
     runs-on: ubuntu-latest
-    
+    permissions:
+      contents: write  # <--- CRITICAL: Allows the bot to save the history file
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
@@ -22,7 +23,6 @@ jobs:
       - name: Install Dependencies
         run: |
           pip install -r requirements.txt
-          # Install ffmpeg (needed for merging video+audio if separate streams)
           sudo apt-get update
           sudo apt-get install -y ffmpeg
 
@@ -33,12 +33,9 @@ jobs:
         run: python youtube_to_drive.py
 
       - name: Commit History
-        # Saves the download_history.txt back to the repo so it remembers for next time
         run: |
           git config --global user.name "GitHub Action"
           git config --global user.email "action@github.com"
-          # Check if history file exists and add it
-          git add download_history.txt || echo "History file not found yet"
-          # Commit only if there are changes
-          git commit -m "Update download history" || echo "No new videos to commit"
+          git add download_history.txt || true
+          git commit -m "Update download history" || echo "No changes to commit"
           git push
