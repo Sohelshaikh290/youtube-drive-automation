@@ -17,7 +17,8 @@ COOKIE_FILE_PATH = "cookies.txt"
 YTDLP_OPTS = {
     # Download best video (max 480p) and best audio, then merge
     'format': 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best[height<=480]',
-    'outtmpl': '%(title)s.%(ext)s',
+    # CRITICAL FIX: Name file by ID locally to avoid "File not found" errors with special characters
+    'outtmpl': '%(id)s.%(ext)s',
     'quiet': True,
     'no_warnings': True,
     'restrictfilenames': True,
@@ -50,9 +51,13 @@ def get_drive_service():
     )
     return build('drive', 'v3', credentials=creds)
 
-def upload_file(service, filepath, folder_id):
-    print(f"Uploading {filepath}...")
-    file_metadata = {'name': filepath, 'parents': [folder_id]}
+def upload_file(service, filepath, folder_id, display_name):
+    file_size_mb = os.path.getsize(filepath) / (1024 * 1024)
+    print(f"Uploading {filepath} ({file_size_mb:.2f} MB) as '{display_name}'...")
+    
+    # We use the 'display_name' (The Video Title) for the file in Google Drive
+    file_metadata = {'name': display_name, 'parents': [folder_id]}
+    
     media = MediaFileUpload(filepath, resumable=True)
     file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
     print(f"File ID: {file.get('id')} uploaded.")
@@ -134,19 +139,24 @@ def main():
             continue
 
         if download_success:
-            # Find the file (sort by newest)
-            files = sorted(glob.glob("*"), key=os.path.getmtime, reverse=True)
-            video_files = [f for f in files if f.endswith(('.mp4', '.mkv', '.webm'))]
+            # FIX: Find the file by looking for the ID (more reliable than Title)
+            # yt-dlp might output .mp4, .mkv, or .webm depending on the merge
+            possible_files = glob.glob(f"{vid_id}.*")
+            video_files = [f for f in possible_files if f.endswith(('.mp4', '.mkv', '.webm'))]
 
             if not video_files:
-                print("Error: Downloaded file not found on disk.")
+                print(f"Error: Downloaded file for ID {vid_id} not found on disk.")
                 continue
                 
             target_file = video_files[0]
+            
+            # Use original title for the filename in Drive, adding extension
+            ext = target_file.split('.')[-1]
+            drive_filename = f"{title}.{ext}"
 
             # 3. Upload to Google Drive
             try:
-                upload_file(drive_service, target_file, folder_id)
+                upload_file(drive_service, target_file, folder_id, drive_filename)
                 save_history(vid_id)
                 print(f"Success! {title} processed.")
                 
