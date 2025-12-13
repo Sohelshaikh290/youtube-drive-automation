@@ -6,20 +6,22 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 import yt_dlp
+import datetime
 
 # --- CONFIGURATION ---
 CHANNEL_URL = "https://www.youtube.com/@DramaGo-Go/videos"
 HISTORY_FILE = "download_history.txt"
 COOKIE_FILE_PATH = "cookies.txt"
 
-# Standard Options
+# Standard Options for Downloading
 YTDLP_OPTS = {
-    'format': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]',
+    # Download best video (max 480p) and best audio, then merge
+    'format': 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best[height<=480]',
     'outtmpl': '%(title)s.%(ext)s',
     'quiet': True,
     'no_warnings': True,
     'restrictfilenames': True,
-    'sleep_interval': 5,
+    'sleep_interval': 5, # Wait 5s between downloads to avoid blocks
 }
 
 def setup_cookies():
@@ -72,18 +74,20 @@ def main():
         print("Error: GDRIVE_FOLDER_ID secret is missing.")
         sys.exit(1)
 
-    # Setup Cookies
+    # Setup Cookies from the environment variable passed by YAML
     has_cookies = setup_cookies()
 
     history = load_history()
     drive_service = get_drive_service()
 
-    print("Checking for new videos...")
+    print("Checking for new videos (Scanning last 10 uploads)...")
     
     # Configure extraction options
     extract_opts = {
         'extract_flat': True, 
         'quiet': True,
+        'playlistend': 10,  # <--- CRITICAL: Stops scanning after the 10th newest video
+        'dateafter': 'now-24hours', # <--- SAFETY: Only looks at videos from the last 24 hours
     }
     if has_cookies:
         extract_opts['cookiefile'] = COOKIE_FILE_PATH
@@ -100,8 +104,12 @@ def main():
         print("No videos found.")
         return
 
-    # Check the last 10 videos
-    recent_videos = [v for v in info['entries'][:10] if v]
+    # Check the found entries (limited to 10 max)
+    recent_videos = [v for v in info['entries'] if v]
+
+    if not recent_videos:
+        print("No videos found in the last 24 hours.")
+        return
 
     for video in recent_videos:
         vid_id = video.get('id')
@@ -126,7 +134,7 @@ def main():
             continue
 
         if download_success:
-            # Find the file
+            # Find the file (sort by newest)
             files = sorted(glob.glob("*"), key=os.path.getmtime, reverse=True)
             video_files = [f for f in files if f.endswith(('.mp4', '.mkv', '.webm'))]
 
@@ -136,13 +144,13 @@ def main():
                 
             target_file = video_files[0]
 
-            # 3. Upload
+            # 3. Upload to Google Drive
             try:
                 upload_file(drive_service, target_file, folder_id)
                 save_history(vid_id)
                 print(f"Success! {title} processed.")
                 
-                # Cleanup video file
+                # Cleanup video file to save space
                 if os.path.exists(target_file):
                     os.remove(target_file)
             except Exception as e:
