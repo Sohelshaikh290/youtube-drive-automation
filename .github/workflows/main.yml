@@ -22,7 +22,6 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          # Install latest yt-dlp to ensure compatibility
           pip install https://github.com/yt-dlp/yt-dlp/archive/master.zip
           pip install -r requirements.txt
           sudo apt-get update
@@ -30,9 +29,10 @@ jobs:
 
       - name: Run Downloader
         env:
-          GDRIVE_SA_KEY: ${{ secrets.GDRIVE_SA_KEY }}
+          # CRITICAL UPDATE: Using OAuth Secret now
+          GDRIVE_OAUTH: ${{ secrets.GDRIVE_OAUTH }}
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
-          COOKIES_TXT: ${{ secrets.COOKIES_TXT }}  # <--- Passing the cookies here
+          COOKIES_TXT: ${{ secrets.COOKIES_TXT }}
         run: python youtube_to_drive.py
 
       - name: Commit History
