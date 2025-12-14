@@ -2,11 +2,14 @@ import os
 import sys
 import json
 import glob
-from google.oauth2 import service_account
+import datetime
+import yt_dlp
+
+# New Authentication Libraries for User Account (2TB Storage)
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-import yt_dlp
-import datetime
 
 # --- CONFIGURATION ---
 CHANNEL_URL = "https://www.youtube.com/@DramaGo-Go/videos"
@@ -15,19 +18,17 @@ COOKIE_FILE_PATH = "cookies.txt"
 
 # Standard Options for Downloading
 YTDLP_OPTS = {
-    # Download best video (max 480p) and best audio, then merge
     'format': 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best[height<=480]',
     
-    # --- SPEED BOOST SETTINGS ---
-    'concurrent_fragment_downloads': 4, # Download 4 parts at once (Faster!)
-    'http_chunk_size': 10485760,        # 10MB chunks for better stability
-    # ---------------------------
+    # Speed Boost Settings
+    'concurrent_fragment_downloads': 4,
+    'http_chunk_size': 10485760, 
 
-    # Name file by ID locally to avoid "File not found" errors with special characters
-    'outtmpl': '%(id)s.%(ext)s',
+    # Settings for stability
+    'outtmpl': '%(id)s.%(ext)s',        # Use ID for filename safety
     'quiet': True,
     'no_warnings': True,
-    'noprogress': True, # Keeps logs clean
+    'noprogress': True,                 # Clean logs
     'restrictfilenames': True,
     'sleep_interval': 5,
 }
@@ -39,7 +40,6 @@ def setup_cookies():
         print("Loading cookies from secret...")
         with open(COOKIE_FILE_PATH, 'w') as f:
             f.write(cookies_content)
-        # Add cookie file to options
         YTDLP_OPTS['cookiefile'] = COOKIE_FILE_PATH
         return True
     else:
@@ -47,28 +47,52 @@ def setup_cookies():
         return False
 
 def get_drive_service():
-    creds_json = os.environ.get('GDRIVE_SA_KEY')
-    if not creds_json:
-        print("Error: GDRIVE_SA_KEY secret is missing.")
+    """Authenticate using OAuth 2.0 User Credentials (Uses YOUR 2TB quota)"""
+    oauth_json = os.environ.get('GDRIVE_OAUTH')
+    if not oauth_json:
+        print("Error: GDRIVE_OAUTH secret is missing. Please add it to GitHub Secrets.")
         sys.exit(1)
     
-    creds_dict = json.loads(creds_json)
-    creds = service_account.Credentials.from_service_account_info(
-        creds_dict, scopes=['https://www.googleapis.com/auth/drive']
-    )
-    return build('drive', 'v3', credentials=creds)
+    try:
+        creds_data = json.loads(oauth_json)
+        
+        # Reconstruct the user credentials using the Refresh Token
+        # This allows the script to get a new "Session Token" automatically
+        creds = Credentials(
+            None, # No access token yet, we will refresh it
+            refresh_token=creds_data['refresh_token'],
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=creds_data['client_id'],
+            client_secret=creds_data['client_secret'],
+            scopes=['https://www.googleapis.com/auth/drive.file']
+        )
+        
+        # Refresh the token immediately to make sure it works
+        if not creds.valid:
+            creds.refresh(Request())
+            
+        return build('drive', 'v3', credentials=creds)
+        
+    except Exception as e:
+        print(f"Authentication Error: {e}")
+        print("Check if your GDRIVE_OAUTH secret is correct.")
+        sys.exit(1)
 
 def upload_file(service, filepath, folder_id, display_name):
     file_size_mb = os.path.getsize(filepath) / (1024 * 1024)
     print(f"Uploading {filepath} ({file_size_mb:.2f} MB) as '{display_name}'...")
     
-    # We use the 'display_name' (The Video Title) for the file in Google Drive
     file_metadata = {'name': display_name, 'parents': [folder_id]}
     
     media = MediaFileUpload(filepath, resumable=True)
-    file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-    print(f"File ID: {file.get('id')} uploaded.")
-    return file.get('id')
+    try:
+        file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        print(f"File ID: {file.get('id')} uploaded successfully.")
+        return file.get('id')
+    except Exception as e:
+        print(f"API Error during upload: {e}")
+        # If error is 403, it means permissions issues, but we solved storage quota by switching users.
+        return None
 
 def load_history():
     if not os.path.exists(HISTORY_FILE):
@@ -86,25 +110,26 @@ def main():
         print("Error: GDRIVE_FOLDER_ID secret is missing.")
         sys.exit(1)
 
-    # Setup Cookies from the environment variable passed by YAML
     has_cookies = setup_cookies()
-
     history = load_history()
-    drive_service = get_drive_service()
+    
+    try:
+        drive_service = get_drive_service()
+    except Exception as e:
+        print(f"Failed to connect to Google Drive: {e}")
+        return
 
     print("Checking for new videos (Scanning last 10 uploads)...")
     
-    # Configure extraction options
     extract_opts = {
         'extract_flat': True, 
         'quiet': True,
-        'playlistend': 10,  # Stops scanning after the 10th newest video
-        'dateafter': 'now-24hours', # Only looks at videos from the last 24 hours
+        'playlistend': 10,
+        'dateafter': 'now-24hours',
     }
     if has_cookies:
         extract_opts['cookiefile'] = COOKIE_FILE_PATH
 
-    # 1. Fetch Video List
     with yt_dlp.YoutubeDL(extract_opts) as ydl:
         try:
             info = ydl.extract_info(CHANNEL_URL, download=False)
@@ -116,9 +141,7 @@ def main():
         print("No videos found.")
         return
 
-    # Check the found entries
     recent_videos = [v for v in info['entries'] if v]
-
     if not recent_videos:
         print("No videos found in the last 24 hours.")
         return
@@ -136,7 +159,6 @@ def main():
         print(f"Found new video: {title} ({vid_id})")
         print("Starting download... (Multi-threaded speed boost active)")
         
-        # 2. Download
         download_success = False
         try:
             with yt_dlp.YoutubeDL(YTDLP_OPTS) as ydl:
@@ -148,7 +170,7 @@ def main():
             continue
 
         if download_success:
-            # FIX: Find the file by looking for the ID
+            # Find file by ID
             possible_files = glob.glob(f"{vid_id}.*")
             video_files = [f for f in possible_files if f.endswith(('.mp4', '.mkv', '.webm'))]
 
@@ -157,24 +179,22 @@ def main():
                 continue
                 
             target_file = video_files[0]
-            
-            # Use original title for the filename in Drive, adding extension
             ext = target_file.split('.')[-1]
             drive_filename = f"{title}.{ext}"
 
-            # 3. Upload to Google Drive
-            try:
-                upload_file(drive_service, target_file, folder_id, drive_filename)
+            # Upload using OAuth Service
+            file_id = upload_file(drive_service, target_file, folder_id, drive_filename)
+            
+            if file_id:
                 save_history(vid_id)
                 print(f"Success! {title} processed.")
+            else:
+                print("Upload failed.")
                 
-                # Cleanup video file to save space
-                if os.path.exists(target_file):
-                    os.remove(target_file)
-            except Exception as e:
-                print(f"Error uploading {title}: {e}")
+            # Cleanup
+            if os.path.exists(target_file):
+                os.remove(target_file)
     
-    # Cleanup cookies file for security
     if os.path.exists(COOKIE_FILE_PATH):
         os.remove(COOKIE_FILE_PATH)
 
