@@ -18,7 +18,15 @@ COOKIE_FILE_PATH = "cookies.txt"
 
 # Standard Options for Downloading
 YTDLP_OPTS = {
-    'format': 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best[height<=480]',
+    # LOGIC UPDATE:
+    # 1. 'bestvideo[height=480]+bestaudio/best[height=480]'
+    #    - Tries to find a video-only stream at exactly 480p and merges it with the best audio.
+    #    - OR tries to find a pre-combined video+audio file at 480p.
+    # 2. Fallback to 720p logic if 480p is totally missing.
+    'format': 'bestvideo[height=480]+bestaudio/best[height=480]/bestvideo[height=720]+bestaudio/best[height=720]/best',
+    
+    # Force the final merged file to be MP4
+    'merge_output_format': 'mp4',
     
     # Speed Boost Settings
     'concurrent_fragment_downloads': 4,
@@ -57,9 +65,8 @@ def get_drive_service():
         creds_data = json.loads(oauth_json)
         
         # Reconstruct the user credentials using the Refresh Token
-        # This allows the script to get a new "Session Token" automatically
         creds = Credentials(
-            None, # No access token yet, we will refresh it
+            None, 
             refresh_token=creds_data['refresh_token'],
             token_uri="https://oauth2.googleapis.com/token",
             client_id=creds_data['client_id'],
@@ -67,7 +74,6 @@ def get_drive_service():
             scopes=['https://www.googleapis.com/auth/drive.file']
         )
         
-        # Refresh the token immediately to make sure it works
         if not creds.valid:
             creds.refresh(Request())
             
@@ -91,7 +97,6 @@ def upload_file(service, filepath, folder_id, display_name):
         return file.get('id')
     except Exception as e:
         print(f"API Error during upload: {e}")
-        # If error is 403, it means permissions issues, but we solved storage quota by switching users.
         return None
 
 def load_history():
@@ -157,20 +162,29 @@ def main():
             continue
 
         print(f"Found new video: {title} ({vid_id})")
-        print("Starting download... (Multi-threaded speed boost active)")
+        print("Starting download... (Priority: 480p Video+Audio Merge -> 720p Fallback)")
         
         download_success = False
         try:
+            # First, check what quality we are about to get (for logging)
+            with yt_dlp.YoutubeDL(YTDLP_OPTS) as ydl:
+                info_dict = ydl.extract_info(video['url'], download=False)
+                if info_dict:
+                    h = info_dict.get('height')
+                    w = info_dict.get('width')
+                    print(f"Detected Resolution: {w}x{h}")
+
+            # Now Download
             with yt_dlp.YoutubeDL(YTDLP_OPTS) as ydl:
                 ydl.download([video['url']])
             download_success = True
-            print("Download phase complete.")
+            print("Download and Merge complete.")
         except Exception as e:
             print(f"Failed to download {title}: {e}")
             continue
 
         if download_success:
-            # Find file by ID
+            # Find file by ID (MP4 because we forced merge)
             possible_files = glob.glob(f"{vid_id}.*")
             video_files = [f for f in possible_files if f.endswith(('.mp4', '.mkv', '.webm'))]
 
